@@ -123,6 +123,77 @@ def create_model_tuned(vocab_size, num_labels, params):
                 tf.keras.metrics.Recall(name='recall')]  # Añadido name
     )
     return model
+def train_with_cross_validation(X, y, params, tokenizer, n_splits=5):
+    """
+    Entrenamiento final usando validación cruzada
+    """
+    kfold = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    metrics_history = {
+        'accuracy': [], 'precision': [], 'recall': [], 
+        'f1': [], 'auc': [], 'loss': []
+    }
+    
+    logging.info(f"\nIniciando entrenamiento con {n_splits}-fold cross-validation")
+    
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(X), 1):
+        logging.info(f"\nFold {fold}/{n_splits}")
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        # Calcular class weights para este fold
+        class_weights = calculate_class_weights(y_train)
+        
+        model = create_model_tuned(MAX_WORDS + 1, y.shape[1], params)
+        
+        early_stopping = EarlyStopping(
+            monitor='val_loss',
+            patience=4,
+            restore_best_weights=True
+        )
+        
+        history = model.fit(
+            X_train, y_train,
+            epochs=15,
+            batch_size=params.get('batch_size', 32),
+            validation_data=(X_val, y_val),
+            callbacks=[early_stopping],
+            class_weight=class_weights[0]
+        )
+        
+        # Evaluación
+        y_pred = model.predict(X_val)
+        y_pred_binary = (y_pred > 0.5).astype(int)
+        
+        # Calcular métricas
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_val, y_pred_binary, average='weighted'
+        )
+        auc = roc_auc_score(y_val, y_pred, average='weighted')
+        
+        # Guardar métricas
+        metrics_history['accuracy'].append(history.history['val_accuracy'][-1])
+        metrics_history['precision'].append(precision)
+        metrics_history['recall'].append(recall)
+        metrics_history['f1'].append(f1)
+        metrics_history['auc'].append(auc)
+        metrics_history['loss'].append(history.history['val_loss'][-1])
+        
+        # Mostrar métricas del fold actual
+        logging.info(f"\nMétricas del fold {fold}:")
+        logging.info(f"Accuracy: {metrics_history['accuracy'][-1]:.4f}")
+        logging.info(f"Precision: {precision:.4f}")
+        logging.info(f"Recall: {recall:.4f}")
+        logging.info(f"F1-Score: {f1:.4f}")
+        logging.info(f"AUC: {auc:.4f}")
+    
+    # Mostrar resultados finales
+    logging.info("\nResultados finales (promedio ± desviación estándar):")
+    for metric, values in metrics_history.items():
+        mean = np.mean(values)
+        std = np.std(values)
+        logging.info(f"{metric}: {mean:.4f} (±{std:.4f})")
+    
+    return metrics_history, params, tokenizer
 
 def objective(trial, X, y, tokenizer):
     """
@@ -170,7 +241,27 @@ def objective(trial, X, y, tokenizer):
         scores.append(history.history['val_accuracy'][-1])
     
     return np.mean(scores)
-
+def calculate_class_weights(y):
+    """
+    Calcula pesos de clase para manejar el desbalanceo de manera más robusta
+    """
+    class_weights = []
+    
+    # Para cada columna (etiqueta)
+    for i in range(y.shape[1]):
+        # Obtener los valores únicos y sus pesos
+        unique_classes = np.unique(y[:, i])
+        weights = compute_class_weight(
+            class_weight='balanced',
+            classes=unique_classes,
+            y=y[:, i]
+        )
+        
+        # Crear diccionario de pesos para esta etiqueta
+        class_weight_dict = dict(zip(unique_classes, weights))
+        class_weights.append(class_weight_dict)
+    
+    return class_weights
 def train_with_optimization(df, n_trials=20):
     """
     Pipeline de entrenamiento con optimización de hiperparámetros
@@ -211,7 +302,7 @@ def train_with_optimization(df, n_trials=20):
         return train_with_cross_validation(X, y, default_params, tokenizer)
 
 if __name__ == "__main__":
-    df = pd.read_csv('data/youtoxic_english_1000.csv')
+    df = pd.read_csv('youtoxic_english_1000.csv')
     
     try:
         logging.info("Iniciando entrenamiento con optimización...")
