@@ -22,22 +22,22 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # Descargar recursos NLTK
-nltk.download('punkt')
+nltk.download('punkt_tab')
 nltk.download('stopwords')
 nltk.download('wordnet')
 
 # Configuración de parámetros base
 MAX_WORDS = 15000
-MAX_LEN = 100
-EMBEDDING_DIM = 200
+MAX_LEN = 128
+EMBEDDING_DIM = 300
 
 def preprocess_text(text_series):
     """
-    Preprocesamiento mejorado con manejo especial de palabras ofensivas
+    Preprocesamiento mejorado con manejo especial de palabras ofensivas.
     """
-    stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against'}
+    stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
     lemmatizer = WordNetLemmatizer()
-    
+
     def clean_text(text):
         # Convertir a minúsculas
         text = text.lower()
@@ -48,27 +48,25 @@ def preprocess_text(text_series):
         text = text.replace('b i t c h', 'bitch')
         
         # Eliminar URLs
-        text = re.sub(r'http\S+|www.\S+', '', text)
+        text = re.sub(r'http\\S+|www.\\S+', '', text)
         
         # Preservar algunos caracteres especiales que pueden indicar toxicidad
-        text = re.sub(r'[^a-zA-Z\s!?*#@$]', '', text)
+        text = re.sub(r'[^a-zA-Z\\s!?*#@$]', '', text)
         
         # Eliminar espacios extras
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'\\s+', ' ', text).strip()
         
-        # Tokenización
-        tokens = word_tokenize(text)
+        # Lematización y eliminación de stopwords
+        words = text.split()  # Dividir en palabras sin tokenización
+        words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
         
-        # Eliminar stopwords y lematización, preservando palabras importantes
-        tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
-        
-        return ' '.join(tokens)
-    
+        return ' '.join(words)
+
     return text_series.apply(clean_text)
 
 def prepare_data(df):
     """
-    Prepara los datos para el entrenamiento
+    Prepara los datos para el entrenamiento.
     """
     # Preprocesar texto
     print("Iniciando preprocesamiento de texto...")
@@ -82,14 +80,9 @@ def prepare_data(df):
     X = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
     
     # Preparar etiquetas
-    target_columns = ['IsToxic', 'IsAbusive', 'IsThreat', 'IsProvocative', 
-                     'IsObscene', 'IsHatespeech', 'IsRacist', 'IsNationalist',
-                     'IsSexist', 'IsHomophobic', 'IsReligiousHate', 'IsRadicalism']
-    y = df[target_columns].values
-    
-    print(f"Vocabulario size: {len(tokenizer.word_index)}")
-    print(f"Forma de X: {X.shape}")
-    print(f"Forma de y: {y.shape}")
+    target_columns = ['IsToxic', 'IsAbusive', 'IsProvocative', 'IsObscene', 'IsHatespeech', 'IsRacist']
+    df['IsOffensive'] = df[target_columns].any(axis=1)
+    y = df['IsOffensive']
     
     return X, y, tokenizer
 
@@ -109,91 +102,43 @@ def create_model_tuned(vocab_size, num_labels, params):
         Dropout(params.get('dropout_2', 0.3)),
         Dense(num_labels, activation='sigmoid')
     ])
-    
+
     optimizer = tf.keras.optimizers.Adam(
         learning_rate=params.get('learning_rate', 0.001)
     )
-    
+
     model.compile(
         optimizer=optimizer,
         loss='binary_crossentropy',
-        metrics=['accuracy', 
+        metrics=['accuracy',
                 tf.keras.metrics.AUC(name='auc'),  # Añadido name
                 tf.keras.metrics.Precision(name='precision'),  # Añadido name
                 tf.keras.metrics.Recall(name='recall')]  # Añadido name
     )
     return model
-def train_with_cross_validation(X, y, params, tokenizer, n_splits=5):
+def train_final_model(X, y, best_params, tokenizer):
     """
-    Entrenamiento final usando validación cruzada
+    Entrenamiento final en un solo conjunto de datos de validación.
     """
-    kfold = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-    metrics_history = {
-        'accuracy': [], 'precision': [], 'recall': [], 
-        'f1': [], 'auc': [], 'loss': []
-    }
-    
-    logging.info(f"\nIniciando entrenamiento con {n_splits}-fold cross-validation")
-    
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(X), 1):
-        logging.info(f"\nFold {fold}/{n_splits}")
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
-        
-        # Calcular class weights para este fold
-        class_weights = calculate_class_weights(y_train)
-        
-        model = create_model_tuned(MAX_WORDS + 1, y.shape[1], params)
-        
-        early_stopping = EarlyStopping(
-            monitor='val_loss',
-            patience=4,
-            restore_best_weights=True
-        )
-        
-        history = model.fit(
-            X_train, y_train,
-            epochs=15,
-            batch_size=params.get('batch_size', 32),
-            validation_data=(X_val, y_val),
-            callbacks=[early_stopping],
-            class_weight=class_weights[0]
-        )
-        
-        # Evaluación
-        y_pred = model.predict(X_val)
-        y_pred_binary = (y_pred > 0.5).astype(int)
-        
-        # Calcular métricas
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            y_val, y_pred_binary, average='weighted'
-        )
-        auc = roc_auc_score(y_val, y_pred, average='weighted')
-        
-        # Guardar métricas
-        metrics_history['accuracy'].append(history.history['val_accuracy'][-1])
-        metrics_history['precision'].append(precision)
-        metrics_history['recall'].append(recall)
-        metrics_history['f1'].append(f1)
-        metrics_history['auc'].append(auc)
-        metrics_history['loss'].append(history.history['val_loss'][-1])
-        
-        # Mostrar métricas del fold actual
-        logging.info(f"\nMétricas del fold {fold}:")
-        logging.info(f"Accuracy: {metrics_history['accuracy'][-1]:.4f}")
-        logging.info(f"Precision: {precision:.4f}")
-        logging.info(f"Recall: {recall:.4f}")
-        logging.info(f"F1-Score: {f1:.4f}")
-        logging.info(f"AUC: {auc:.4f}")
-    
-    # Mostrar resultados finales
-    logging.info("\nResultados finales (promedio ± desviación estándar):")
-    for metric, values in metrics_history.items():
-        mean = np.mean(values)
-        std = np.std(values)
-        logging.info(f"{metric}: {mean:.4f} (±{std:.4f})")
-    
-    return metrics_history, params, tokenizer
+    # Entrena con los mejores parámetros encontrados en `objective`
+    model = create_model_tuned(MAX_WORDS + 1, y.shape[1], best_params)
+
+    early_stopping = EarlyStopping(
+        monitor='val_loss',
+        patience=4,
+        restore_best_weights=True
+    )
+
+    # Si tienes un conjunto de validación externo, úsalo aquí.
+    history = model.fit(
+        X, y,
+        epochs=15,
+        batch_size=best_params.get('batch_size', 32),
+        validation_split=0.1,  # Usa solo una pequeña parte para validación
+        callbacks=[early_stopping]
+    )
+
+    return history, model
 
 def objective(trial, X, y, tokenizer):
     """
@@ -211,23 +156,23 @@ def objective(trial, X, y, tokenizer):
         'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),  # Corregido
         'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64])
     }
-    
+
     # Validación cruzada para evaluación más robusta
     kf = KFold(n_splits=3, shuffle=True)
     scores = []
-    
+
     for train_idx, val_idx in kf.split(X):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
-        
+
         model = create_model_tuned(MAX_WORDS + 1, y.shape[1], params)
-        
+
         early_stopping = EarlyStopping(
             monitor='val_loss',
             patience=3,
             restore_best_weights=True
         )
-        
+
         history = model.fit(
             X_train, y_train,
             epochs=10,
@@ -236,14 +181,14 @@ def objective(trial, X, y, tokenizer):
             callbacks=[early_stopping],
             verbose=0
         )
-        
+
         # Usar accuracy en lugar de AUC para la optimización
         scores.append(history.history['val_accuracy'][-1])
-    
+
     return np.mean(scores)
 def calculate_class_weights(y):
     """
-    Calcula pesos de clase para manejar el desbalanceo de manera más robusta
+    Calcula pesos de clase con manejo mejorado del desbalanceo
     """
     class_weights = []
     
@@ -251,13 +196,17 @@ def calculate_class_weights(y):
     for i in range(y.shape[1]):
         # Obtener los valores únicos y sus pesos
         unique_classes = np.unique(y[:, i])
-        weights = compute_class_weight(
-            class_weight='balanced',
-            classes=unique_classes,
-            y=y[:, i]
-        )
-        
-        # Crear diccionario de pesos para esta etiqueta
+        if len(unique_classes) > 1:  # Si hay más de una clase
+            weights = compute_class_weight(
+                class_weight='balanced',
+                classes=unique_classes,
+                y=y[:, i]
+            )
+            # Ajustar pesos para clases muy minoritarias
+            weights = np.clip(weights, 0.1, 10.0)  # Evitar pesos extremos
+        else:
+            weights = np.ones_like(unique_classes)
+            
         class_weight_dict = dict(zip(unique_classes, weights))
         class_weights.append(class_weight_dict)
     
@@ -268,21 +217,21 @@ def train_with_optimization(df, n_trials=20):
     """
     logging.info("Preparando datos...")
     X, y, tokenizer = prepare_data(df)
-    
+
     logging.info("Iniciando optimización de hiperparámetros...")
     study = optuna.create_study(direction='maximize')
-    
+
     try:
-        study.optimize(lambda trial: objective(trial, X, y, tokenizer), 
+        study.optimize(lambda trial: objective(trial, X, y, tokenizer),
                       n_trials=n_trials)
-        
+
         best_params = study.best_params
         logging.info("Mejores hiperparámetros encontrados:")
         for param, value in best_params.items():
             logging.info(f"{param}: {value}")
-        
-        return train_with_cross_validation(X, y, best_params, tokenizer)
-    
+
+        return train_final_model(X, y, best_params, tokenizer)
+
     except Exception as e:
         logging.error(f"Error durante la optimización: {str(e)}")
         # Usar parámetros por defecto si falla la optimización
@@ -299,27 +248,27 @@ def train_with_optimization(df, n_trials=20):
             'batch_size': 32
         }
         logging.info("Usando parámetros por defecto debido al error...")
-        return train_with_cross_validation(X, y, default_params, tokenizer)
+        return train_final_model(X, y, default_params, tokenizer)
 
 if __name__ == "__main__":
-    df = pd.read_csv('youtoxic_english_1000.csv')
-    
+    df = pd.read_csv('data/youtoxic_english_1000.csv')
+
     try:
         logging.info("Iniciando entrenamiento con optimización...")
         metrics, best_params, tokenizer = train_with_optimization(df, n_trials=20)
-        
+
         # Guardar métricas y parámetros
         results_summary = {
             'metrics': {k: [float(v) for v in vals] for k, vals in metrics.items()},
             'best_params': best_params
         }
-        
+
         # Guardar resultados
         import json
         with open('training_results.json', 'w') as f:
             json.dump(results_summary, f, indent=4)
-        
+
         logging.info("Entrenamiento completado y resultados guardados.")
-        
+
     except Exception as e:
         logging.error(f"Error durante el entrenamiento: {str(e)}")
