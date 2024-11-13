@@ -17,6 +17,7 @@ import nltk
 from sklearn.utils.class_weight import compute_class_weight
 import optuna
 import logging
+import fasttext.util
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -72,7 +73,11 @@ def prepare_data(df):
     print("Iniciando preprocesamiento de texto...")
     processed_texts = preprocess_text(df['Text'])
     
-    # Tokenización con Keras
+    # Cargar el modelo preentrenado de FastText
+    fasttext.util.download_model('en', if_exists='ignore')
+    ft_model = fasttext.load_model('cc.en.300.bin')
+    
+    # Tokenización y creación de secuencias
     print("Tokenizando textos...")
     tokenizer = Tokenizer(num_words=MAX_WORDS, oov_token='<OOV>')
     tokenizer.fit_on_texts(processed_texts)
@@ -84,14 +89,21 @@ def prepare_data(df):
     df['IsOffensive'] = df[target_columns].any(axis=1)
     y = df['IsOffensive']
     
-    return X, y, tokenizer
+    # Crear matriz de embeddingss a partir del modelo FastText
+    word_index = tokenizer.word_index
+    embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
+    for word, i in word_index.items():
+        if i < MAX_WORDS:
+            embedding_matrix[i] = ft_model.get_word_vector(word)
+    
+    return X, y, tokenizer, embedding_matrix
 
-def create_model_tuned(vocab_size, num_labels, params):
+def create_model_tuned(vocab_size, num_labels, params, embedding_matrix):
     """
-    Versión mejorada del modelo con parámetros optimizados
+    Versión mejorada del modelo con parámetros optimizados y embeddings de FastText
     """
     model = Sequential([
-        Embedding(vocab_size, params.get('embedding_dim', EMBEDDING_DIM)),
+        Embedding(vocab_size, params.get('embedding_dim', EMBEDDING_DIM), weights=[embedding_matrix], trainable=False),
         Conv1D(params.get('conv_filters', 128), 5, activation='relu'),
         Bidirectional(LSTM(params.get('lstm_units_1', 64), return_sequences=True)),
         Bidirectional(LSTM(params.get('lstm_units_2', 32), return_sequences=True)),
@@ -111,11 +123,12 @@ def create_model_tuned(vocab_size, num_labels, params):
         optimizer=optimizer,
         loss='binary_crossentropy',
         metrics=['accuracy',
-                tf.keras.metrics.AUC(name='auc'),  # Añadido name
-                tf.keras.metrics.Precision(name='precision'),  # Añadido name
-                tf.keras.metrics.Recall(name='recall')]  # Añadido name
+                tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')]
     )
     return model
+
 def train_final_model(X, y, best_params, tokenizer):
     """
     Entrenamiento final en un solo conjunto de datos de validación.
