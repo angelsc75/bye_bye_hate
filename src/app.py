@@ -3,15 +3,15 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import Tokenizer
 import numpy as np
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+import nltk
 import re
 import os
-import nltk
+import pickle
 from youtube_api import YouTubeAPI
 from dotenv import load_dotenv
 import time
+import pandas as pd
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -34,7 +34,7 @@ MAX_LEN = 128
 
 # Inicializar lematizador y palabras vacías
 lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
+stop_words = set(nltk.corpus.stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
 
 @st.cache_resource
 def load_model():
@@ -45,9 +45,13 @@ def load_model():
     return tf.keras.models.load_model(model_path)
 
 @st.cache_resource
-def create_tokenizer():
-    """Crear y configurar el tokenizer"""
-    return Tokenizer(num_words=MAX_WORDS, oov_token='<OOV>')
+def load_tokenizer():
+    """Cargar el tokenizer desde el archivo pickle"""
+    tokenizer_path = 'tokenizer.pickle'
+    if not os.path.exists(tokenizer_path):
+        raise FileNotFoundError(f"El tokenizer no se encuentra en la ruta: {tokenizer_path}")
+    with open(tokenizer_path, 'rb') as handle:
+        return pickle.load(handle)
 
 def preprocess_text(text):
     """Preprocesar el texto con el mismo proceso usado en el entrenamiento"""
@@ -97,12 +101,20 @@ def get_comments_selenium(video_url):
                 print(f"Error al obtener comentario: {e}")
     return data
 
-# Cargar el modelo
+def analyze_text(model, tokenizer, text):
+    """Analizar un texto y retornar la probabilidad de que sea ofensivo"""
+    processed_text = preprocess_text(text)
+    sequences = tokenizer.texts_to_sequences([processed_text])
+    padded_sequences = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
+    prediction = model.predict(padded_sequences, verbose=0)
+    return float(prediction[0][0])
+
+# Cargar el modelo y el tokenizer
 try:
     model = load_model()
-    tokenizer = create_tokenizer()
+    tokenizer = load_tokenizer()
 except Exception as e:
-    st.error(f"Error al cargar el modelo: {str(e)}")
+    st.error(f"Error al cargar el modelo o tokenizer: {str(e)}")
     st.stop()
 
 st.title('Detección de Mensajes de Odio en Comentarios de YouTube')
@@ -117,42 +129,36 @@ with tab1:
     if st.button('Analizar Comentario', key='analyze_comment'):
         if user_input:
             try:
-                # Preprocesar el texto
-                processed_text = preprocess_text(user_input)
+                prob_ofensivo = analyze_text(model, tokenizer, user_input)
                 
-                # Tokenizar y padear la secuencia
-                sequences = tokenizer.texts_to_sequences([processed_text])
-                padded_sequences = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
+                # Crear un contenedor para los resultados
+                results_container = st.container()
                 
-                # Hacer la predicción
-                prediction = model.predict(padded_sequences)
-                
-                # Mostrar resultados con una barra de progreso
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric(
-                        "Probabilidad de mensaje no ofensivo",
-                        f"{(1 - prediction[0][0]):.2%}"
-                    )
+                with results_container:
+                    # Mostrar la barra de probabilidad
+                    st.progress(prob_ofensivo)
                     
-                with col2:
-                    st.metric(
-                        "Probabilidad de mensaje ofensivo",
-                        f"{prediction[0][0]:.2%}"
-                    )
-                
-                # Mostrar una barra de progreso
-                st.progress(float(prediction[0][0]))
-                
-                # Mostrar el resultado final
-                if prediction[0][0] > 0.5:
-                    st.error('⚠️ Este comentario ha sido clasificado como potencialmente ofensivo')
-                else:
-                    st.success('✅ Este comentario parece no ser ofensivo')
-                
+                    # Mostrar el porcentaje y la clasificación
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric(
+                            "Probabilidad de mensaje no ofensivo",
+                            f"{(1 - prob_ofensivo):.1%}"
+                        )
+                    with col2:
+                        st.metric(
+                            "Probabilidad de mensaje ofensivo",
+                            f"{prob_ofensivo:.1%}"
+                        )
+                    
+                    # Mostrar la clasificación final
+                    if prob_ofensivo > 0.5:
+                        st.error('⚠️ Este mensaje ha sido clasificado como potencialmente ofensivo')
+                    else:
+                        st.success('✅ Este mensaje ha sido clasificado como no ofensivo')
+                    
             except Exception as e:
-                st.error(f"Error en el procesamiento: {str(e)}")
+                st.error(f"Error en el análisis: {str(e)}")
         else:
             st.warning('Por favor, introduce un comentario para analizar.')
 
@@ -191,15 +197,10 @@ with tab2:
                     progress_bar = st.progress(0)
                     
                     for i, comment in enumerate(comments):
-                        # Preprocesar y predecir
-                        processed_text = preprocess_text(comment)
-                        sequences = tokenizer.texts_to_sequences([processed_text])
-                        padded_sequences = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
-                        prediction = model.predict(padded_sequences, verbose=0)
-                        
+                        prob_ofensivo = analyze_text(model, tokenizer, comment)
                         results.append({
                             'texto': comment,
-                            'prob_ofensivo': float(prediction[0][0])
+                            'prob_ofensivo': prob_ofensivo
                         })
                         
                         # Actualizar barra de progreso
@@ -210,6 +211,7 @@ with tab2:
                     
                     # Calcular estadísticas
                     total_offensive = sum(1 for r in results if r['prob_ofensivo'] > 0.5)
+                    avg_prob = np.mean([r['prob_ofensivo'] for r in results])
                     
                     # Mostrar resumen
                     col1, col2, col3 = st.columns(3)
@@ -218,18 +220,36 @@ with tab2:
                     with col2:
                         st.metric("Comentarios ofensivos", total_offensive)
                     with col3:
-                        st.metric("Porcentaje ofensivo", f"{(total_offensive/len(comments)):.1%}")
+                        st.metric("Probabilidad media", f"{avg_prob:.1%}")
+                    
+                    # Mostrar gráfico de distribución si hay suficientes comentarios
+                    if len(results) > 5:
+                        probs = [r['prob_ofensivo'] for r in results]
+                        st.subheader("Distribución de probabilidades")
+                        hist_data = np.histogram(probs, bins=10, range=(0,1))
+                        st.bar_chart(pd.DataFrame({
+                            'Probabilidad': hist_data[0]
+                        }))
                     
                     # Mostrar comentarios individuales
+                    st.subheader("Análisis detallado de comentarios")
+                    sort_option = st.selectbox(
+                        'Ordenar comentarios por:',
+                        ['Probabilidad (mayor a menor)', 'Probabilidad (menor a mayor)', 'Orden original']
+                    )
+                    
+                    if sort_option == 'Probabilidad (mayor a menor)':
+                        results.sort(key=lambda x: x['prob_ofensivo'], reverse=True)
+                    elif sort_option == 'Probabilidad (menor a mayor)':
+                        results.sort(key=lambda x: x['prob_ofensivo'])
+                    
                     for i, result in enumerate(results, 1):
-                        with st.expander(f"Comentario {i}"):
+                        with st.expander(
+                            f"Comentario {i} - Probabilidad de ser ofensivo: {result['prob_ofensivo']:.1%}"
+                        ):
                             st.text(result['texto'])
                             st.progress(result['prob_ofensivo'])
-                            if result['prob_ofensivo'] > 0.5:
-                                st.error(f"Probabilidad de ser ofensivo: {result['prob_ofensivo']:.2%}")
-                            else:
-                                st.success(f"Probabilidad de ser ofensivo: {result['prob_ofensivo']:.2%}")
-                                
+                            
             except Exception as e:
                 st.error(f"Error inesperado: {str(e)}")
         else:
@@ -239,18 +259,16 @@ with tab2:
 with st.sidebar:
     st.subheader("Acerca del modelo")
     st.write("""
-    Este sistema utiliza un modelo de Deep Learning basado en redes neuronales LSTM 
-    bidireccionales con embeddings pre-entrenados para detectar contenido ofensivo 
-    en comentarios.
+    Este sistema utiliza un modelo de Deep Learning que combina:
+    - Embeddings preentrenados de GloVe
+    - Capas convolucionales (CNN)
+    - Redes LSTM bidireccionales
     
-    El modelo ha sido entrenado para detectar:
-    - Mensajes de odio
-    - Contenido abusivo
-    - Lenguaje ofensivo
-    - Contenido provocativo
+    El modelo ha sido entrenado para detectar contenido ofensivo 
+    en comentarios, incluyendo mensajes de odio, lenguaje abusivo,
+    y contenido tóxico.
     
-    ⚠️ Nota: Este es un modelo experimental y sus predicciones deben ser consideradas 
-    como orientativas.
+    ⚠️ Nota: Este es un modelo experimental y sus predicciones deben 
+    ser consideradas como orientativas.
     """)
-
 

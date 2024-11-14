@@ -19,19 +19,20 @@ import optuna
 import logging
 import spacy
 import gensim.downloader as api
+import pickle
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 
 # Descargar recursos NLTK
-nltk.download('punkt_tab')
+nltk.download('punkt')  # Cambiado de punkt_tab a punkt
 nltk.download('stopwords')
 nltk.download('wordnet')
 
 # Configuración de parámetros base
 MAX_WORDS = 15000
 MAX_LEN = 128
-EMBEDDING_DIM = 120
+EMBEDDING_DIM = 300  # Cambiado a 300 para coincidir con GloVe
 
 def preprocess_text(text_series):
     """
@@ -41,32 +42,32 @@ def preprocess_text(text_series):
     lemmatizer = WordNetLemmatizer()
 
     def clean_text(text):
+        if not isinstance(text, str):
+            text = str(text)
         # Convertir a minúsculas
         text = text.lower()
-        
+
         # Preservar ciertas palabras compuestas ofensivas
         text = text.replace('son of a bitch', 'sonofabitch')
         text = text.replace('f u c k', 'fuck')
         text = text.replace('b i t c h', 'bitch')
-        
+
         # Eliminar URLs
-        text = re.sub(r'http\\S+|www.\\S+', '', text)
-        
+        text = re.sub(r'http\S+|www.\S+', '', text)
+
         # Preservar algunos caracteres especiales que pueden indicar toxicidad
-        text = re.sub(r'[^a-zA-Z\\s!?*#@$]', '', text)
-        
+        text = re.sub(r'[^a-zA-Z\s!?*#@$]', '', text)
+
         # Eliminar espacios extras
-        text = re.sub(r'\\s+', ' ', text).strip()
-        
+        text = re.sub(r'\s+', ' ', text).strip()
+
         # Lematización y eliminación de stopwords
-        words = text.split()  # Dividir en palabras sin tokenización
+        words = text.split()
         words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
-        
+
         return ' '.join(words)
 
     return text_series.apply(clean_text)
-
-
 
 def prepare_data(df):
     """
@@ -75,52 +76,40 @@ def prepare_data(df):
     # Preprocesar texto
     print("Iniciando preprocesamiento de texto...")
     processed_texts = preprocess_text(df['Text'])
-    
-    # Cargar el modelo preentrenado de spaCy
-    nlp = spacy.load("en_core_web_sm")
-    
+
     # Tokenización y creación de secuencias
     print("Tokenizando textos...")
     tokenizer = Tokenizer(num_words=MAX_WORDS, oov_token='<OOV>')
-    
-    # Usar spaCy para tokenizar y obtener los tokens
-    docs = [nlp(text) for text in processed_texts]
-    tokens = [[token.text for token in doc] for doc in docs]
-    
-    # Ajustar el tokenizer y crear las secuencias
-    tokenizer.fit_on_texts(tokens)
-    sequences = tokenizer.texts_to_sequences(tokens)
+    tokenizer.fit_on_texts(processed_texts)
+    sequences = tokenizer.texts_to_sequences(processed_texts)
     X = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
-    
+
     # Preparar etiquetas
     target_columns = ['IsToxic', 'IsAbusive', 'IsProvocative', 'IsObscene', 'IsHatespeech', 'IsRacist']
     df['IsOffensive'] = df[target_columns].any(axis=1)
-    y = df['IsOffensive']
-    y = y.astype(int)
+    y = df['IsOffensive'].astype(int)
 
     # Cargar los embeddings de GloVe
     print("Cargando embeddings de GloVe...")
     glove_model = api.load("glove-wiki-gigaword-300")
-    
-    # Crear matriz de embeddings a partir del modelo GloVe
-    word_index = tokenizer.word_index
-    embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
-    for word, i in word_index.items():
-        if i < MAX_WORDS:
+
+    # Crear matriz de embeddings
+    embedding_matrix = np.zeros((MAX_WORDS + 1, EMBEDDING_DIM))
+    for word, i in tokenizer.word_index.items():
+        if i < MAX_WORDS:  # Solo procesamos hasta MAX_WORDS
             try:
                 embedding_matrix[i] = glove_model[word]
             except KeyError:
-                # Si la palabra no está en el modelo GloVe, usar vector de ceros
-                pass
-    
+                continue  # Si la palabra no está en GloVe, dejamos el vector en ceros
+
     return X, y, tokenizer, embedding_matrix
 
 def create_model_tuned(vocab_size, num_labels, params, embedding_matrix):
     """
-    Versión mejorada del modelo con parámetros optimizados y embeddings de FastText
+    Versión mejorada del modelo con parámetros optimizados y embeddings
     """
     model = Sequential([
-        Embedding(vocab_size, params.get('embedding_dim', EMBEDDING_DIM), weights=[embedding_matrix], trainable=False),
+        Embedding(vocab_size, EMBEDDING_DIM, weights=[embedding_matrix], trainable=False),
         Conv1D(params.get('conv_filters', 128), 5, activation='relu'),
         Bidirectional(LSTM(params.get('lstm_units_1', 64), return_sequences=True)),
         Bidirectional(LSTM(params.get('lstm_units_2', 32), return_sequences=True)),
@@ -129,55 +118,25 @@ def create_model_tuned(vocab_size, num_labels, params, embedding_matrix):
         Dropout(params.get('dropout_1', 0.5)),
         Dense(params.get('dense_units_2', 64), activation='relu'),
         Dropout(params.get('dropout_2', 0.3)),
-        Dense(num_labels, activation='sigmoid')  # Asegurarse de que num_labels = 1 para binario
+        Dense(num_labels, activation='sigmoid')
     ])
 
-    optimizer = tf.keras.optimizers.Adam(
-        learning_rate=params.get('learning_rate', 0.001)
-    )
+    optimizer = tf.keras.optimizers.Adam(learning_rate=params.get('learning_rate', 0.001))
 
     model.compile(
         optimizer=optimizer,
-        loss='binary_crossentropy',  # Loss para clasificación binaria
-        metrics=['accuracy',
-                 tf.keras.metrics.AUC(name='auc'),
-                 tf.keras.metrics.Precision(name='precision'),
-                 tf.keras.metrics.Recall(name='recall')]
+        loss='binary_crossentropy',
+        metrics=['accuracy', tf.keras.metrics.AUC(name='auc'),
+                tf.keras.metrics.Precision(name='precision'),
+                tf.keras.metrics.Recall(name='recall')]
     )
     return model
-
-def train_final_model(X, y, best_params, tokenizer):
-    """
-    Entrenamiento final en un solo conjunto de datos de validación.
-    """
-    # Entrena con los mejores parámetros encontrados en `objective`
-    
-    model = create_model_tuned(MAX_WORDS + 1, 1, best_params)
-
-
-    early_stopping = EarlyStopping(
-        monitor='val_loss',
-        patience=4,
-        restore_best_weights=True
-    )
-
-    # Si tienes un conjunto de validación externo, úsalo aquí.
-    history = model.fit(
-        X, y,
-        epochs=15,
-        batch_size=best_params.get('batch_size', 32),
-        validation_split=0.1,  # Usa solo una pequeña parte para validación
-        callbacks=[early_stopping]
-    )
-
-    return history, model
 
 def objective(trial, X, y, tokenizer, embedding_matrix):
     """
     Función objetivo para Optuna
     """
     params = {
-        'embedding_dim': trial.suggest_int('embedding_dim', 100, 300),
         'conv_filters': trial.suggest_int('conv_filters', 64, 256),
         'lstm_units_1': trial.suggest_int('lstm_units_1', 32, 128),
         'lstm_units_2': trial.suggest_int('lstm_units_2', 16, 64),
@@ -185,7 +144,7 @@ def objective(trial, X, y, tokenizer, embedding_matrix):
         'dense_units_2': trial.suggest_int('dense_units_2', 32, 128),
         'dropout_1': trial.suggest_float('dropout_1', 0.2, 0.6),
         'dropout_2': trial.suggest_float('dropout_2', 0.1, 0.4),
-        'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),  # Corregido
+        'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
         'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64])
     }
 
@@ -198,8 +157,6 @@ def objective(trial, X, y, tokenizer, embedding_matrix):
         y_train, y_val = y[train_idx], y[val_idx]
 
         model = create_model_tuned(MAX_WORDS + 1, 1, params, embedding_matrix)
-
-
 
         early_stopping = EarlyStopping(
             monitor='val_loss',
@@ -216,35 +173,10 @@ def objective(trial, X, y, tokenizer, embedding_matrix):
             verbose=0
         )
 
-        # Usar accuracy en lugar de AUC para la optimización
         scores.append(history.history['val_accuracy'][-1])
 
     return np.mean(scores)
-def calculate_class_weights(y):
-    """
-    Calcula pesos de clase con manejo mejorado del desbalanceo
-    """
-    class_weights = []
-    
-    # Para cada columna (etiqueta)
-    for i in range(y.shape[1]):
-        # Obtener los valores únicos y sus pesos
-        unique_classes = np.unique(y[:, i])
-        if len(unique_classes) > 1:  # Si hay más de una clase
-            weights = compute_class_weight(
-                class_weight='balanced',
-                classes=unique_classes,
-                y=y[:, i]
-            )
-            # Ajustar pesos para clases muy minoritarias
-            weights = np.clip(weights, 0.1, 10.0)  # Evitar pesos extremos
-        else:
-            weights = np.ones_like(unique_classes)
-            
-        class_weight_dict = dict(zip(unique_classes, weights))
-        class_weights.append(class_weight_dict)
-    
-    return class_weights
+
 def train_with_optimization(df, n_trials=20):
     """
     Pipeline de entrenamiento con optimización de hiperparámetros
@@ -265,7 +197,7 @@ def train_with_optimization(df, n_trials=20):
             logging.info(f"{param}: {value}")
 
         logging.info("Entrenando modelo final...")
-        final_model = create_model_tuned(MAX_WORDS + 1, y.shape[1], best_params, embedding_matrix)
+        final_model = create_model_tuned(MAX_WORDS + 1, 1, best_params, embedding_matrix)
         history = final_model.fit(
             X, y,
             epochs=15,
@@ -274,13 +206,11 @@ def train_with_optimization(df, n_trials=20):
             callbacks=[EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True)]
         )
 
-        return final_model
+        return final_model, history
 
     except Exception as e:
         logging.error(f"Error durante la optimización: {str(e)}")
-        # Usar parámetros por defecto si falla la optimización
         default_params = {
-            'embedding_dim': EMBEDDING_DIM,
             'conv_filters': 128,
             'lstm_units_1': 64,
             'lstm_units_2': 32,
@@ -292,7 +222,7 @@ def train_with_optimization(df, n_trials=20):
             'batch_size': 32
         }
         logging.info("Usando parámetros por defecto debido al error...")
-        final_model = create_model_tuned(MAX_WORDS + 1, y.shape[1], default_params, embedding_matrix)
+        final_model = create_model_tuned(MAX_WORDS + 1, 1, default_params, embedding_matrix)
         history = final_model.fit(
             X, y,
             epochs=15,
@@ -301,15 +231,18 @@ def train_with_optimization(df, n_trials=20):
             callbacks=[EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True)]
         )
 
-        return final_model
+        return final_model, history
 
 if __name__ == "__main__":
+    import tokenizer
+    # Asegúrate de que el archivo CSV existe y tiene las columnas correctas
     df = pd.read_csv('youtoxic_english_1000.csv')
 
     try:
         logging.info("Iniciando entrenamiento con optimización...")
-        final_model = train_with_optimization(df, n_trials=20)
-
+        final_model, history = train_with_optimization(df, n_trials=20)
+        with open('tokenizer.pickle', 'wb') as handle:
+          pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
         # Guardar el modelo
         final_model.save('final_model.h5')
         logging.info("Entrenamiento completado y modelo guardado.")
