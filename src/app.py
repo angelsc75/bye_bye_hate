@@ -20,6 +20,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+
 # Cargar variables de entorno
 load_dotenv()
 
@@ -39,7 +40,7 @@ stop_words = set(nltk.corpus.stopwords.words('english')) - {'no', 'not', 'hate',
 @st.cache_resource
 def load_model():
     """Cargar el modelo desde el archivo h5"""
-    model_path = 'final_model.h5'
+    model_path = 'models/final_model.h5'
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"El modelo no se encuentra en la ruta: {model_path}")
     return tf.keras.models.load_model(model_path)
@@ -47,7 +48,7 @@ def load_model():
 @st.cache_resource
 def load_tokenizer():
     """Cargar el tokenizer desde el archivo pickle"""
-    tokenizer_path = 'tokenizer.pickle'
+    tokenizer_path = 'models/tokenizer.pickle'
     if not os.path.exists(tokenizer_path):
         raise FileNotFoundError(f"El tokenizer no se encuentra en la ruta: {tokenizer_path}")
     with open(tokenizer_path, 'rb') as handle:

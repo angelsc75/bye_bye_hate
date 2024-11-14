@@ -33,7 +33,7 @@ nltk.download('averaged_perceptron_tagger')
 # Configuración de parámetros base
 MAX_WORDS = 15000
 MAX_LEN = 128
-EMBEDDING_DIM = 300
+EMBEDDING_DIM = 200
 
 # Diccionario de palabras ofensivas y sus sinónimos
 OFFENSIVE_SYNONYMS = {
@@ -194,10 +194,8 @@ class ModelTrainer:
         y = np.array(all_labels)
         
         # Cargar embeddings
-        logging.info("Cargando embeddings de GloVe...")
-        glove_model = api.load("glove-wiki-gigaword-300")
-        
-        # Crear matriz de embeddings
+        logging.info("Cargando embeddings de GloVe de Twitter...")
+        glove_model = api.load("glove-twitter-200")
         embedding_matrix = np.zeros((MAX_WORDS + 1, EMBEDDING_DIM))
         for word, i in self.tokenizer.word_index.items():
             if i < MAX_WORDS:
@@ -293,11 +291,11 @@ if __name__ == "__main__":
         final_model, history, tokenizer = trainer.train_with_optimization(df, n_trials=20)
         
         # Guardar el tokenizer
-        with open('tokenizer.pickle', 'wb') as handle:
+        with open('models/tokenizer.pickle', 'wb') as handle:
             pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
             
         # Guardar el modelo
-        final_model.save('final_model.h5')
+        final_model.save('models/final_model.h5')
         logging.info("Entrenamiento completado y modelo guardado.")
 
     except Exception as e:
