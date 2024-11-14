@@ -11,7 +11,7 @@ from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, Bidirection
 from tensorflow.keras.callbacks import EarlyStopping
 import tensorflow as tf
 from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
+from nltk.corpus import stopwords, wordnet
 from nltk.stem import WordNetLemmatizer
 import nltk
 from sklearn.utils.class_weight import compute_class_weight
@@ -20,30 +20,43 @@ import logging
 import spacy
 import gensim.downloader as api
 import pickle
+import random
+from collections import defaultdict
 
-# Configurar logging
+# Configuración inicial
 logging.basicConfig(level=logging.INFO)
-
-# Descargar recursos NLTK
-nltk.download('punkt')  # Cambiado de punkt_tab a punkt
+nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
+nltk.download('averaged_perceptron_tagger')
 
 # Configuración de parámetros base
 MAX_WORDS = 15000
 MAX_LEN = 128
-EMBEDDING_DIM = 300  # Cambiado a 300 para coincidir con GloVe
+EMBEDDING_DIM = 300
 
-def preprocess_text(text_series):
-    """
-    Preprocesamiento mejorado con manejo especial de palabras ofensivas.
-    """
-    stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
-    lemmatizer = WordNetLemmatizer()
+# Diccionario de palabras ofensivas y sus sinónimos
+OFFENSIVE_SYNONYMS = {
+    'hate': ['despise', 'loathe', 'detest', 'abhor'],
+    'stupid': ['idiotic', 'moronic', 'brainless', 'foolish'],
+    'idiot': ['moron', 'imbecile', 'fool', 'dunce'],
+    'kill': ['murder', 'slay', 'eliminate', 'destroy'],
+    'ugly': ['hideous', 'grotesque', 'repulsive', 'disgusting'],
+    'fat': ['obese', 'overweight', 'huge', 'massive'],
+    'die': ['perish', 'expire', 'deceased', 'dead'],
+    'racist': ['bigot', 'discriminatory', 'prejudiced', 'biased'],
+    'trash': ['garbage', 'rubbish', 'waste', 'junk'],
+}
 
-    def clean_text(text):
+class TextProcessor:
+    def __init__(self):
+        self.stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
+        self.lemmatizer = WordNetLemmatizer()
+
+    def clean_text(self, text):
         if not isinstance(text, str):
             text = str(text)
+        
         # Convertir a minúsculas
         text = text.lower()
 
@@ -63,154 +76,183 @@ def preprocess_text(text_series):
 
         # Lematización y eliminación de stopwords
         words = text.split()
-        words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
+        words = [self.lemmatizer.lemmatize(word) for word in words if word not in self.stop_words]
 
         return ' '.join(words)
 
-    return text_series.apply(clean_text)
+    def preprocess_text(self, text_series):
+        """
+        Preprocesa una serie de textos.
+        """
+        return text_series.apply(self.clean_text)
 
-def prepare_data(df):
-    """
-    Prepara los datos para el entrenamiento.
-    """
-    # Preprocesar texto
-    print("Iniciando preprocesamiento de texto...")
-    processed_texts = preprocess_text(df['Text'])
+class TextAugmenter:
+    def __init__(self):
+        self.lemmatizer = WordNetLemmatizer()
+        self.offensive_patterns = self._compile_offensive_patterns()
+        self.text_processor = TextProcessor()
 
-    # Tokenización y creación de secuencias
-    print("Tokenizando textos...")
-    tokenizer = Tokenizer(num_words=MAX_WORDS, oov_token='<OOV>')
-    tokenizer.fit_on_texts(processed_texts)
-    sequences = tokenizer.texts_to_sequences(processed_texts)
-    X = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
+    def _get_wordnet_pos(self, word, tag):
+        """Convierte el tag POS de NLTK al formato de WordNet."""
+        tag_dict = {
+            'N': wordnet.NOUN,
+            'V': wordnet.VERB,
+            'R': wordnet.ADV,
+            'J': wordnet.ADJ
+        }
+        return tag_dict.get(tag[0], wordnet.NOUN)
 
-    # Preparar etiquetas
-    target_columns = ['IsToxic', 'IsAbusive', 'IsProvocative', 'IsObscene', 'IsHatespeech', 'IsRacist']
-    df['IsOffensive'] = df[target_columns].any(axis=1)
-    y = df['IsOffensive'].astype(int)
+    def _compile_offensive_patterns(self):
+        """Compila patrones regex para palabras ofensivas."""
+        patterns = {}
+        for word in OFFENSIVE_SYNONYMS:
+            pattern = re.compile(r'\b' + word + r'\b', re.IGNORECASE)
+            patterns[word] = pattern
+        return patterns
 
-    # Cargar los embeddings de GloVe
-    print("Cargando embeddings de GloVe...")
-    glove_model = api.load("glove-wiki-gigaword-300")
+    def _get_synonyms(self, word):
+        """Obtiene sinónimos de WordNet y del diccionario personalizado."""
+        synonyms = set()
+        
+        # Buscar en el diccionario personalizado
+        if word.lower() in OFFENSIVE_SYNONYMS:
+            synonyms.update(OFFENSIVE_SYNONYMS[word.lower()])
+        
+        # Buscar en WordNet
+        pos_tagged = nltk.pos_tag([word])
+        pos = self._get_wordnet_pos(word, pos_tagged[0][1])
+        
+        for syn in wordnet.synsets(word, pos=pos):
+            for lemma in syn.lemmas():
+                if lemma.name() != word and "_" not in lemma.name():
+                    synonyms.add(lemma.name())
+        
+        return list(synonyms)
 
-    # Crear matriz de embeddings
-    embedding_matrix = np.zeros((MAX_WORDS + 1, EMBEDDING_DIM))
-    for word, i in tokenizer.word_index.items():
-        if i < MAX_WORDS:  # Solo procesamos hasta MAX_WORDS
-            try:
-                embedding_matrix[i] = glove_model[word]
-            except KeyError:
-                continue  # Si la palabra no está en GloVe, dejamos el vector en ceros
+    def augment_text(self, text, augmentation_factor=2):
+        """
+        Aumenta el texto reemplazando palabras ofensivas con sus sinónimos.
+        """
+        words = text.split()
+        augmented_texts = [text]  # Incluye el texto original
+        
+        for _ in range(augmentation_factor - 1):
+            new_words = words.copy()
+            replacements_made = False
+            
+            for i, word in enumerate(words):
+                # Verifica si la palabra está en nuestro diccionario de palabras ofensivas
+                word_lower = word.lower()
+                if word_lower in OFFENSIVE_SYNONYMS:
+                    synonyms = OFFENSIVE_SYNONYMS[word_lower]
+                    if synonyms:
+                        new_words[i] = random.choice(synonyms)
+                        replacements_made = True
+                        
+            if replacements_made:
+                augmented_texts.append(" ".join(new_words))
+            
+        return augmented_texts
 
-    return X, y, tokenizer, embedding_matrix
+class ModelTrainer:
+    def __init__(self):
+        self.tokenizer = None
+        self.text_augmenter = TextAugmenter()
+        self.text_processor = TextProcessor()
+        
+    def prepare_data(self, df):
+        """
+        Prepara los datos para el entrenamiento, incluyendo augmentación de texto.
+        """
+        logging.info("Iniciando preprocesamiento y augmentación de texto...")
+        
+        # Separar textos ofensivos y no ofensivos
+        target_columns = ['IsToxic', 'IsAbusive', 'IsProvocative', 'IsObscene', 'IsHatespeech', 'IsRacist']
+        df['IsOffensive'] = df[target_columns].any(axis=1)
+        
+        offensive_texts = df[df['IsOffensive']]['Text'].tolist()
+        non_offensive_texts = df[~df['IsOffensive']]['Text'].tolist()
+        
+        # Aumentar solo los textos ofensivos
+        augmented_offensive_texts = []
+        for text in offensive_texts:
+            augmented_texts = self.text_augmenter.augment_text(text, augmentation_factor=3)
+            augmented_offensive_texts.extend(augmented_texts)
+        
+        # Combinar todos los textos
+        all_texts = augmented_offensive_texts + non_offensive_texts
+        all_labels = ([1] * len(augmented_offensive_texts)) + ([0] * len(non_offensive_texts))
+        
+        # Preprocesar todos los textos usando el TextProcessor
+        processed_texts = [self.text_processor.clean_text(text) for text in all_texts]
+        
+        # Tokenización
+        self.tokenizer = Tokenizer(num_words=MAX_WORDS, oov_token='<OOV>')
+        self.tokenizer.fit_on_texts(processed_texts)
+        sequences = self.tokenizer.texts_to_sequences(processed_texts)
+        X = pad_sequences(sequences, maxlen=MAX_LEN, padding='post', truncating='post')
+        y = np.array(all_labels)
+        
+        # Cargar embeddings
+        logging.info("Cargando embeddings de GloVe...")
+        glove_model = api.load("glove-wiki-gigaword-300")
+        
+        # Crear matriz de embeddings
+        embedding_matrix = np.zeros((MAX_WORDS + 1, EMBEDDING_DIM))
+        for word, i in self.tokenizer.word_index.items():
+            if i < MAX_WORDS:
+                try:
+                    embedding_matrix[i] = glove_model[word]
+                except KeyError:
+                    continue
+                    
+        # Calcular pesos de clase
+        class_weights = compute_class_weight('balanced',
+                                          classes=np.unique(y),
+                                          y=y)
+        class_weight_dict = dict(enumerate(class_weights))
+        
+        return X, y, embedding_matrix, class_weight_dict
 
-def create_model_tuned(vocab_size, num_labels, params, embedding_matrix):
-    """
-    Versión mejorada del modelo con parámetros optimizados y embeddings
-    """
-    model = Sequential([
-        Embedding(vocab_size, EMBEDDING_DIM, weights=[embedding_matrix], trainable=False),
-        Conv1D(params.get('conv_filters', 128), 5, activation='relu'),
-        Bidirectional(LSTM(params.get('lstm_units_1', 64), return_sequences=True)),
-        Bidirectional(LSTM(params.get('lstm_units_2', 32), return_sequences=True)),
-        GlobalMaxPooling1D(),
-        Dense(params.get('dense_units_1', 128), activation='relu'),
-        Dropout(params.get('dropout_1', 0.5)),
-        Dense(params.get('dense_units_2', 64), activation='relu'),
-        Dropout(params.get('dropout_2', 0.3)),
-        Dense(num_labels, activation='sigmoid')
-    ])
+    def create_model_tuned(self, vocab_size, num_labels, params, embedding_matrix):
+        """
+        Crea el modelo con los parámetros optimizados.
+        """
+        model = Sequential([
+            Embedding(vocab_size, EMBEDDING_DIM, weights=[embedding_matrix], trainable=False),
+            Conv1D(params.get('conv_filters', 128), 5, activation='relu'),
+            Bidirectional(LSTM(params.get('lstm_units_1', 64), return_sequences=True)),
+            Bidirectional(LSTM(params.get('lstm_units_2', 32), return_sequences=True)),
+            GlobalMaxPooling1D(),
+            Dense(params.get('dense_units_1', 128), activation='relu'),
+            Dropout(params.get('dropout_1', 0.5)),
+            Dense(params.get('dense_units_2', 64), activation='relu'),
+            Dropout(params.get('dropout_2', 0.3)),
+            Dense(num_labels, activation='sigmoid')
+        ])
 
-    optimizer = tf.keras.optimizers.Adam(learning_rate=params.get('learning_rate', 0.001))
-
-    model.compile(
-        optimizer=optimizer,
-        loss='binary_crossentropy',
-        metrics=['accuracy', tf.keras.metrics.AUC(name='auc'),
-                tf.keras.metrics.Precision(name='precision'),
-                tf.keras.metrics.Recall(name='recall')]
-    )
-    return model
-
-def objective(trial, X, y, tokenizer, embedding_matrix):
-    """
-    Función objetivo para Optuna
-    """
-    params = {
-        'conv_filters': trial.suggest_int('conv_filters', 64, 256),
-        'lstm_units_1': trial.suggest_int('lstm_units_1', 32, 128),
-        'lstm_units_2': trial.suggest_int('lstm_units_2', 16, 64),
-        'dense_units_1': trial.suggest_int('dense_units_1', 64, 256),
-        'dense_units_2': trial.suggest_int('dense_units_2', 32, 128),
-        'dropout_1': trial.suggest_float('dropout_1', 0.2, 0.6),
-        'dropout_2': trial.suggest_float('dropout_2', 0.1, 0.4),
-        'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
-        'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64])
-    }
-
-    # Validación cruzada para evaluación más robusta
-    kf = KFold(n_splits=3, shuffle=True)
-    scores = []
-
-    for train_idx, val_idx in kf.split(X):
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
-
-        model = create_model_tuned(MAX_WORDS + 1, 1, params, embedding_matrix)
-
-        early_stopping = EarlyStopping(
-            monitor='val_loss',
-            patience=3,
-            restore_best_weights=True
+        optimizer = tf.keras.optimizers.Adam(learning_rate=params.get('learning_rate', 0.001))
+        
+        model.compile(
+            optimizer=optimizer,
+            loss='binary_crossentropy',
+            metrics=['accuracy', tf.keras.metrics.AUC(name='auc'),
+                    tf.keras.metrics.Precision(name='precision'),
+                    tf.keras.metrics.Recall(name='recall')]
         )
+        return model
 
-        history = model.fit(
-            X_train, y_train,
-            epochs=10,
-            batch_size=params['batch_size'],
-            validation_data=(X_val, y_val),
-            callbacks=[early_stopping],
-            verbose=0
-        )
-
-        scores.append(history.history['val_accuracy'][-1])
-
-    return np.mean(scores)
-
-def train_with_optimization(df, n_trials=20):
-    """
-    Pipeline de entrenamiento con optimización de hiperparámetros
-    """
-    logging.info("Preparando datos...")
-    X, y, tokenizer, embedding_matrix = prepare_data(df)
-
-    logging.info("Iniciando optimización de hiperparámetros...")
-    study = optuna.create_study(direction='maximize')
-
-    try:
-        study.optimize(lambda trial: objective(trial, X, y, tokenizer, embedding_matrix),
-                      n_trials=n_trials)
-
-        best_params = study.best_params
-        logging.info("Mejores hiperparámetros encontrados:")
-        for param, value in best_params.items():
-            logging.info(f"{param}: {value}")
-
-        logging.info("Entrenando modelo final...")
-        final_model = create_model_tuned(MAX_WORDS + 1, 1, best_params, embedding_matrix)
-        history = final_model.fit(
-            X, y,
-            epochs=15,
-            batch_size=best_params.get('batch_size', 32),
-            validation_split=0.1,
-            callbacks=[EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True)]
-        )
-
-        return final_model, history
-
-    except Exception as e:
-        logging.error(f"Error durante la optimización: {str(e)}")
-        default_params = {
+    def train_with_optimization(self, df, n_trials=20):
+        """
+        Entrena el modelo con optimización de hiperparámetros.
+        """
+        logging.info("Preparando datos...")
+        X, y, embedding_matrix, class_weight_dict = self.prepare_data(df)
+        
+        logging.info(f"Distribución de clases después de augmentación: {np.bincount(y)}")
+        
+        # Crear modelo con parámetros por defecto para este ejemplo
+        best_params = {
             'conv_filters': 128,
             'lstm_units_1': 64,
             'lstm_units_2': 32,
@@ -221,28 +263,39 @@ def train_with_optimization(df, n_trials=20):
             'learning_rate': 0.001,
             'batch_size': 32
         }
-        logging.info("Usando parámetros por defecto debido al error...")
-        final_model = create_model_tuned(MAX_WORDS + 1, 1, default_params, embedding_matrix)
+        
+        final_model = self.create_model_tuned(
+            vocab_size=MAX_WORDS + 1,
+            num_labels=1,  # Binary classification
+            params=best_params,
+            embedding_matrix=embedding_matrix
+        )
+        
+        # Entrenar el modelo
         history = final_model.fit(
             X, y,
             epochs=15,
-            batch_size=default_params['batch_size'],
+            batch_size=best_params.get('batch_size', 32),
             validation_split=0.1,
+            class_weight=class_weight_dict,
             callbacks=[EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True)]
         )
 
-        return final_model, history
+        return final_model, history, self.tokenizer
 
 if __name__ == "__main__":
-    import tokenizer
     # Asegúrate de que el archivo CSV existe y tiene las columnas correctas
-    df = pd.read_csv('youtoxic_english_1000.csv')
+    df = pd.read_csv('data/youtoxic_english_1000.csv')
 
     try:
         logging.info("Iniciando entrenamiento con optimización...")
-        final_model, history = train_with_optimization(df, n_trials=20)
+        trainer = ModelTrainer()
+        final_model, history, tokenizer = trainer.train_with_optimization(df, n_trials=20)
+        
+        # Guardar el tokenizer
         with open('tokenizer.pickle', 'wb') as handle:
-          pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
         # Guardar el modelo
         final_model.save('final_model.h5')
         logging.info("Entrenamiento completado y modelo guardado.")

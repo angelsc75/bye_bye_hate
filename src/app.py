@@ -39,7 +39,7 @@ stop_words = set(nltk.corpus.stopwords.words('english')) - {'no', 'not', 'hate',
 @st.cache_resource
 def load_model():
     """Cargar el modelo desde el archivo h5"""
-    model_path = 'models/final_model.h5'
+    model_path = 'final_model.h5'
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"El modelo no se encuentra en la ruta: {model_path}")
     return tf.keras.models.load_model(model_path)
