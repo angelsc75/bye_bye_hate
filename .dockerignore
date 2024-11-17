@@ -1,31 +1,101 @@
-# Ignore Python bytecode
-__pycache__
-*.pyc
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 
-# Ignore Jupyter Notebook checkpoints
-.ipynb_checkpoints
+# Python packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Ignore virtual environment
+# Virtual Environment
 venv/
+ENV/
 .env
-.venv
+.venv/
 
-# Ignore data files
+# IDEs and Editors
+.vscode/
+*.code-workspace
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+docker-compose.yml
+.docker/
+.dockerignore
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+
+# Data and Models (mounted as volumes)
 data/
-
-# Ignore models
 models/
+datasets/
+checkpoints/
 
-# Ignore logs
+# Logs and Debugging
 logs/
 *.log
+debug/
+.debug/
 
-# Ignore git files
-.git
-.gitignore
+# MongoDB
+mongodb_data/
+dump/
 
-# Ignore VS Code settings
-.vscode/
+# Documentation
+docs/
+*.md
+LICENSE
 
-# Ignore PyCharm settings
-.idea/
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Misc
+*.bak
+*.tmp
+*.temp
+*.swp
+.env.*
+temp/
+tmp/
