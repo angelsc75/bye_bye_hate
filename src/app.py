@@ -147,6 +147,29 @@ def save_to_mongodb(comments_data, video_id):
     except Exception as e:
         st.error(f"Error saving to MongoDB: {str(e)}")
         return 0
+def get_offensive_tags_comments(comments_data):
+    # Diccionario de palabras ofensivas con su categoría
+    offensive_tags = {
+        'Sexual': ['fuck', 'dick', 'pussy', 'sex', 'porn', 'whore', 'slut'],
+        'Racist': ['nigger', 'chink', 'spic', 'racist', 'hate'],
+        'Homophobic': ['faggot', 'homo', 'tranny', 'gay'],
+        'Violent': ['kill', 'die', 'murder', 'assault', 'beat'],
+        'Derogatory': ['idiot', 'stupid', 'dumb', 'retard', 'loser', 'idiots']
+    }
+
+    tag_comments = {}
+    for tag, words in offensive_tags.items():
+        tag_matching_comments = [
+            comment for comment in comments_data 
+            if any(word.lower() in comment['texto'].lower() for word in words)
+        ]
+        
+        # Ordenar por probabilidad de ser ofensivo
+        tag_matching_comments.sort(key=lambda x: x['prob_ofensivo'], reverse=True)
+        
+        tag_comments[tag] = tag_matching_comments
+
+    return tag_comments
 
 def export_to_csv(comments_data, video_id):
     """Export comments to CSV file"""
@@ -199,7 +222,7 @@ def main():
     st.title('Detección de Mensajes de Odio en Comentarios de YouTube')
 
     # Crear las pestañas
-    tab1, tab2, tab3 = st.tabs(["Análisis de Comentario", "Análisis de Video", "Exportar y Monitorear"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Análisis de Comentario", "Análisis de Video", "Exportar y Monitorear", "Búsqueda por Etiquetas"])
 
     with tab1:
         user_input = st.text_area('Introduce un comentario para analizar', key='user_input')
@@ -490,6 +513,28 @@ def main():
 
             except Exception as e:
                 st.error(f"Error al cargar estadísticas: {str(e)}")
+    with tab4:
+        st.subheader("Búsqueda de Comentarios por Etiquetas Ofensivas")
+        
+        if 'results' in locals() and results:  # Verificar si hay resultados de análisis previo
+            tag_comments = get_offensive_tags_comments(results)
+            
+            selected_tag = st.radio(
+                "Selecciona una categoría de palabras ofensivas:", 
+                list(tag_comments.keys())
+            )
+            
+            if tag_comments[selected_tag]:
+                st.write(f"Comentarios con etiqueta '{selected_tag}': {len(tag_comments[selected_tag])}")
+                
+                for comment in tag_comments[selected_tag]:
+                    with st.expander(f"Probabilidad: {comment['prob_ofensivo']:.1%}"):
+                        st.write(comment['texto'])
+                        st.progress(comment['prob_ofensivo'])
+            else:
+                st.info(f"No se encontraron comentarios con palabras de la categoría {selected_tag}")
+        else:
+            st.warning("Primero debes realizar un análisis de video para usar esta función")
 
 if __name__ == "__main__":
     main()
