@@ -120,16 +120,21 @@ def analyze_text(model, tokenizer, text):
 # MongoDB configuration
 def init_mongodb():
     """Initialize MongoDB connection"""
-    mongo_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+    mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
     client = pymongo.MongoClient(mongo_uri)
-    db = client['youtube_comments']
-    return db['comments']
+    db = client[os.getenv('DATABASE_NAME', 'NLP')]
+    return db[os.getenv('COLLECTION_NAME', 'lebels')]
 
 def save_to_mongodb(comments_data, video_id):
-    """Save comments to MongoDB"""
+    """Save only toxic comments (>50% probability) to MongoDB"""
     try:
         collection = init_mongodb()
-        for comment in comments_data:
+        toxic_comments = [
+            comment for comment in comments_data 
+            if comment['prob_ofensivo'] > 0.5
+        ]
+        
+        for comment in toxic_comments:
             comment['video_id'] = video_id
             comment['timestamp'] = datetime.now()
             collection.update_one(
@@ -137,10 +142,11 @@ def save_to_mongodb(comments_data, video_id):
                 {'$set': comment},
                 upsert=True
             )
-        return True
+        
+        return len(toxic_comments)
     except Exception as e:
         st.error(f"Error saving to MongoDB: {str(e)}")
-        return False
+        return 0
 
 def export_to_csv(comments_data, video_id):
     """Export comments to CSV file"""
