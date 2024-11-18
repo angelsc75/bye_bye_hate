@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/ang01/Desktop/CURSO%20F5/17%20Proyecto%20NLP/NPL-G11/mlruns/640537420430802391/573bd27d6ac94228ae9f51566c02cf26/artifacts
+end_time: 1731953510989
+entry_point_name: ''
+experiment_id: '640537420430802391'
+lifecycle_stage: active
+run_id: 573bd27d6ac94228ae9f51566c02cf26
+run_name: loud-squirrel-513
+run_uuid: 573bd27d6ac94228ae9f51566c02cf26
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1731953187084
+status: 3
+tags: []
+user_id: ang01

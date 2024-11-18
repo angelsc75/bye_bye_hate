@@ -344,7 +344,7 @@ class ModelTrainer:
             'dense_units_1': 32,
             'dropout_1': 0.5,
             'learning_rate': 0.0005,
-            'batch_size': 32,
+            'batch_size': 128,
             'epochs': 20
         }
         
