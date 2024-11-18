@@ -18,9 +18,11 @@ from tensorflow.keras.layers import (
     GlobalMaxPooling1D, 
     Conv1D,
     Input,
-    BatchNormalization
+    BatchNormalization,
+    SpatialDropout1D
 )
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.regularizers import l2
 import tensorflow as tf
 
 from nltk.tokenize import word_tokenize
@@ -259,7 +261,6 @@ class ModelTrainer:
                 self.recall = tf.keras.metrics.Recall()
 
             def update_state(self, y_true, y_pred, sample_weight=None):
-                # Convertir predicciones a binario usando 0.5 como umbral
                 y_pred = tf.cast(y_pred > 0.5, tf.float32)
                 self.precision.update_state(y_true, y_pred, sample_weight)
                 self.recall.update_state(y_true, y_pred, sample_weight)
@@ -267,39 +268,58 @@ class ModelTrainer:
             def result(self):
                 p = self.precision.result()
                 r = self.recall.result()
-                # Calcular F1 Score: 2 * (precision * recall) / (precision + recall)
                 return 2 * ((p * r) / (p + r + tf.keras.backend.epsilon()))
 
             def reset_state(self):
                 self.precision.reset_state()
                 self.recall.reset_state()
 
+        # Definir el learning rate schedule
+        initial_learning_rate = params['learning_rate']
+        decay_steps = 1000
+        decay_rate = 0.9
+        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate,
+            decay_steps=decay_steps,
+            decay_rate=decay_rate,
+            staircase=True
+        )
+
         model = Sequential([
             Input(shape=(MAX_LEN,)),
             Embedding(MAX_WORDS + 1, EMBEDDING_DIM, 
                     weights=[embedding_matrix], 
                     trainable=False),
+            SpatialDropout1D(0.3),
             BatchNormalization(),
             
             Conv1D(params['conv_filters'], 5, activation='relu',
-                kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+                kernel_regularizer=l2(0.02),
+                bias_regularizer=l2(0.02)),
             BatchNormalization(),
+            Dropout(0.4),
             
-            Bidirectional(LSTM(params['lstm_units_1'], 
-                            return_sequences=False,
-                            kernel_regularizer=tf.keras.regularizers.l2(0.01))),
+            Bidirectional(LSTM(params['lstm_units_1'] //2, 
+                            return_sequences=True,
+                            kernel_regularizer=l2(0.02),
+                            recurrent_regularizer=l2(0.02),
+                            bias_regularizer=l2(0.02))),
             BatchNormalization(),
+            Dropout(0.4),
             
-            Dense(params['dense_units_1'], 
+            GlobalMaxPooling1D(),
+            
+            Dense(params['dense_units_1']//2, 
                 activation='relu',
-                kernel_regularizer=tf.keras.regularizers.l2(0.01)),
-            Dropout(params['dropout_1']),
+                kernel_regularizer=l2(0.02)),
+            
+            Dropout(0.5),
             
             Dense(1, activation='sigmoid')
         ])
 
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=params['learning_rate'],
+            learning_rate=lr_schedule,
             clipnorm=1.0
         )
         
@@ -310,7 +330,7 @@ class ModelTrainer:
                     tf.keras.metrics.AUC(name='auc'),
                     tf.keras.metrics.Precision(name='precision'),
                     tf.keras.metrics.Recall(name='recall'),
-                    BinaryF1Score(name='f1')]  # Usar nuestra métrica personalizada
+                    BinaryF1Score(name='f1')]
         )
         return model
 
@@ -320,14 +340,15 @@ class ModelTrainer:
         X, y = self.prepare_data(df)
         embedding_matrix = self.load_embeddings()
         
+         # Parámetros actualizados para prevenir overfitting
         params = {
-            'conv_filters': 64,  # Reducido para prevenir overfitting
-            'lstm_units_1': 32,  # Reducido para prevenir overfitting
-            'dense_units_1': 64, # Reducido para prevenir overfitting
+            'conv_filters': 32,  # Reducido
+            'lstm_units_1': 16,  # Reducido significativamente
+            'dense_units_1': 32, # Reducido
             'dropout_1': 0.5,
-            'learning_rate': 0.001,
-            'batch_size': 32,
-            'epochs': 15
+            'learning_rate': 0.0005,  # Reducido
+            'batch_size': 16,  # Reducido
+            'epochs': 20  # Aumentado para compensar el learning rate más bajo
         }
         
         kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -354,25 +375,30 @@ class ModelTrainer:
                 callbacks = [
                     EarlyStopping(
                         monitor='val_loss',
-                        patience=4,
+                        patience=5,  # Aumentado
                         restore_best_weights=True,
-                        min_delta=0.001
+                        min_delta=0.001,
+                        mode='min'
                     ),
                     ReduceLROnPlateau(
                         monitor='val_loss',
-                        factor=0.5,
-                        patience=2,
-                        min_lr=1e-6
+                        factor=0.2,  # Más agresivo
+                        patience=3,
+                        min_lr=1e-6,
+                        mode='min'
                     )
                 ]
                 
+                # En el entrenamiento, añadimos validación más frecuente
                 history = model.fit(
                     X_train, y_train,
                     epochs=params['epochs'],
                     batch_size=params['batch_size'],
                     validation_data=(X_val, y_val),
+                    validation_freq=1,  # Validar cada época
                     class_weight=class_weight_dict,
-                    callbacks=callbacks
+                    callbacks=callbacks,
+                    shuffle=True  # Asegurar shuffle en cada época
                 )
                 
                 scores = model.evaluate(X_val, y_val)
@@ -401,7 +427,7 @@ class ModelTrainer:
                     mlflow.log_metric('accuracy_difference', accuracy_difference)
                     
                     # Log de alerta si hay señales de overfitting
-                    if accuracy_difference > 0.1:  # threshold arbitrario del 10%
+                    if accuracy_difference > 0.05:  # threshold arbitrario del 10%
                         logging.warning(f"Posible overfitting detectado: diferencia de accuracy = {accuracy_difference:.4f}")
 
                 if 'val_loss' in history.history and 'loss' in history.history:
