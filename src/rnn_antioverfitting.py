@@ -335,27 +335,23 @@ class ModelTrainer:
         return model
 
     def train_with_cv(self, df, n_splits=5):
-        mlflow.set_experiment("toxic_text_classification")
-        
         X, y = self.prepare_data(df)
         embedding_matrix = self.load_embeddings()
         
-         # Parámetros actualizados para prevenir overfitting
         params = {
-            'conv_filters': 32,  # Reducido
-            'lstm_units_1': 16,  # Reducido significativamente
-            'dense_units_1': 32, # Reducido
+            'conv_filters': 32,
+            'lstm_units_1': 16,
+            'dense_units_1': 32,
             'dropout_1': 0.5,
-            'learning_rate': 0.0005,  # Reducido
-            'batch_size': 16,  # Reducido
-            'epochs': 20  # Aumentado para compensar el learning rate más bajo
+            'learning_rate': 0.0005,
+            'batch_size': 32,
+            'epochs': 20
         }
         
         kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_metrics = []
         
-        mlflow.tensorflow.autolog(log_models=False)
-        
+        # Eliminar la configuración de autolog aquí
         with mlflow.start_run() as run:
             mlflow.log_params(params)
             
@@ -366,8 +362,8 @@ class ModelTrainer:
                 y_train, y_val = y[train_idx], y[val_idx]
                 
                 class_weights = compute_class_weight('balanced',
-                                                  classes=np.unique(y_train),
-                                                  y=y_train)
+                                                classes=np.unique(y_train),
+                                                y=y_train)
                 class_weight_dict = dict(enumerate(class_weights))
                 
                 model = self.create_model(params, embedding_matrix)
@@ -375,33 +371,33 @@ class ModelTrainer:
                 callbacks = [
                     EarlyStopping(
                         monitor='val_loss',
-                        patience=5,  # Aumentado
+                        patience=5,
                         restore_best_weights=True,
                         min_delta=0.001,
                         mode='min'
                     ),
                     ReduceLROnPlateau(
                         monitor='val_loss',
-                        factor=0.2,  # Más agresivo
+                        factor=0.2,
                         patience=3,
                         min_lr=1e-6,
                         mode='min'
                     )
                 ]
                 
-                # En el entrenamiento, añadimos validación más frecuente
                 history = model.fit(
                     X_train, y_train,
                     epochs=params['epochs'],
                     batch_size=params['batch_size'],
                     validation_data=(X_val, y_val),
-                    validation_freq=1,  # Validar cada época
+                    validation_freq=1,
                     class_weight=class_weight_dict,
                     callbacks=callbacks,
-                    shuffle=True  # Asegurar shuffle en cada época
+                    shuffle=True
                 )
                 
-                scores = model.evaluate(X_val, y_val)
+                # Log métricas manualmente
+                scores = model.evaluate(X_val, y_val, verbose=0)
                 metrics = dict(zip(model.metrics_names, scores))
                 fold_metrics.append(metrics)
                 
@@ -485,9 +481,6 @@ def evaluate_model_performance(model, X_test, y_test):
     return metrics
 
 if __name__ == "__main__":
-    # Configurar MLflow
-    mlflow.tensorflow.autolog()
-    
     # Configurar logging detallado
     logging.basicConfig(
         level=logging.INFO,
@@ -513,6 +506,11 @@ if __name__ == "__main__":
             stratify=df['IsOffensive'],
             random_state=42
         )
+        
+        # Configurar MLflow - Mover la configuración aquí y desactivar el autolog
+        mlflow.set_experiment("toxic_text_classification")
+        # Desactivar el autolog global
+        mlflow.tensorflow.autolog(log_models=False, disable=True)
         
         logging.info("Iniciando entrenamiento con validación cruzada...")
         trainer = ModelTrainer()
