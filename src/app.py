@@ -181,7 +181,7 @@ def schedule_updates(video_id):
         except Exception as e:
             print(f"Error updating comments: {str(e)}")
 
-    schedule.every(5).minutes.do(update_comments)
+    schedule.every(30).seconds.do(update_comments)
 
     while True:
         schedule.run_pending()
