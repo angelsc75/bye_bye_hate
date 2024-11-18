@@ -1,8 +1,9 @@
 artifact_uri: file:///C:/Users/ang01/Desktop/CURSO%20F5/17%20Proyecto%20NLP/NPL-G11/mlruns/640537420430802391/1d59e5d9178e46cfa99aee5ae909d25d/artifacts
+deleted_time: 1731955547611
 end_time: 1731953515796
 entry_point_name: ''
 experiment_id: '640537420430802391'
-lifecycle_stage: active
+lifecycle_stage: deleted
 run_id: 1d59e5d9178e46cfa99aee5ae909d25d
 run_name: traveling-snail-122
 run_uuid: 1d59e5d9178e46cfa99aee5ae909d25d

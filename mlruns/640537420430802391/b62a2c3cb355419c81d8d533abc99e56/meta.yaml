@@ -1,8 +1,9 @@
 artifact_uri: file:///C:/Users/ang01/Desktop/CURSO%20F5/17%20Proyecto%20NLP/NPL-G11/mlruns/640537420430802391/b62a2c3cb355419c81d8d533abc99e56/artifacts
+deleted_time: 1731955547613
 end_time: 1731954014260
 entry_point_name: ''
 experiment_id: '640537420430802391'
-lifecycle_stage: active
+lifecycle_stage: deleted
 run_id: b62a2c3cb355419c81d8d533abc99e56
 run_name: placid-mink-299
 run_uuid: b62a2c3cb355419c81d8d533abc99e56
