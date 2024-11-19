@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/Administrator/Desktop/PROYECTO%204%20NLP/NPL-G11/mlruns/504966794220676959/e3e4ad4aedbe43988387a99d90e709b0/artifacts
+end_time: 1731964250595
+entry_point_name: ''
+experiment_id: '504966794220676959'
+lifecycle_stage: active
+run_id: e3e4ad4aedbe43988387a99d90e709b0
+run_name: secretive-gnat-683
+run_uuid: e3e4ad4aedbe43988387a99d90e709b0
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1731964245557
+status: 3
+tags: []
+user_id: Administrator

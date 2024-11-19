@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/Administrator/Desktop/PROYECTO%204%20NLP/NPL-G11/mlruns/504966794220676959/bdce42eb04a24862a5d6593aa4773dad/artifacts
+end_time: 1731964245514
+entry_point_name: ''
+experiment_id: '504966794220676959'
+lifecycle_stage: active
+run_id: bdce42eb04a24862a5d6593aa4773dad
+run_name: sincere-donkey-125
+run_uuid: bdce42eb04a24862a5d6593aa4773dad
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1731963950304
+status: 3
+tags: []
+user_id: Administrator

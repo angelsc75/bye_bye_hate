@@ -29,7 +29,10 @@ import schedule
 # Cargar variables de entorno
 load_dotenv()
 
+# Ahora puedes acceder a las variables de entorno
+tf_enable_onednn_opts = os.getenv('TF_ENABLE_ONEDNN_OPTS')
 # Descargar recursos NLTK
+
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
@@ -130,10 +133,10 @@ def save_to_mongodb(comments_data, video_id):
     try:
         collection = init_mongodb()
         toxic_comments = [
-            comment for comment in comments_data 
+            comment for comment in comments_data
             if comment['prob_ofensivo'] > 0.5
         ]
-        
+
         for comment in toxic_comments:
             comment['video_id'] = video_id
             comment['timestamp'] = datetime.now()
@@ -142,7 +145,7 @@ def save_to_mongodb(comments_data, video_id):
                 {'$set': comment},
                 upsert=True
             )
-        
+
         return len(toxic_comments)
     except Exception as e:
         st.error(f"Error saving to MongoDB: {str(e)}")
@@ -203,7 +206,7 @@ def main():
 
     with tab1:
         user_input = st.text_area('Introduce un comentario para analizar', key='user_input')
-        st.snow()
+       
         if st.button('Analizar Comentario', key='analyze_comment'):
             if user_input:
                 try:
