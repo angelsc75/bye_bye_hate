@@ -1,19 +1,24 @@
-FROM python:3.12.1-slim
+# Usar una imagen base de Python
+FROM python:3.9-slim
 
+# Establecer el directorio de trabajo
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
+# Copiar archivos de requirements y del proyecto
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copiar el resto del código al contenedor
+COPY src/ ./src
+COPY models/ ./models
 
-RUN python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')"
+# Establecer variables de entorno
+ENV PYTHONUNBUFFERED=1
+ENV STREAMLIT_SERVER_PORT=8501
+ENV TF_ENABLE_ONEDNN_OPTS=0
 
+# Exponer el puerto para Streamlit
 EXPOSE 8501
 
-CMD ["streamlit", "run", "src/app.py", "--server.address=0.0.0.0"]
+# Comando para ejecutar la aplicación
+CMD ["streamlit", "run", "src/app.py"]
