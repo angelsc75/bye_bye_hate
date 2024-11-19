@@ -1,46 +1,54 @@
-import pandas as pd
-import numpy as np
-import re
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
-from sklearn.utils.class_weight import compute_class_weight
+# Importación de librerías necesarias
+# --- Librerías de procesamiento de datos ---
+import pandas as pd  # Para manipulación de datos tabulares
+import numpy as np   # Para operaciones numéricas
+import re           # Para expresiones regulares
 
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
+# --- Librerías de Machine Learning ---
+from sklearn.model_selection import StratifiedKFold, train_test_split  # Para división de datos y validación cruzada
+from sklearn.preprocessing import LabelEncoder  # Para codificación de etiquetas
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score  # Para métricas de evaluación
+from sklearn.utils.class_weight import compute_class_weight  # Para manejar desbalance de clases
+
+# --- Librerías de Deep Learning (TensorFlow/Keras) ---
+from tensorflow.keras.preprocessing.text import Tokenizer  # Para tokenización de texto
+from tensorflow.keras.preprocessing.sequence import pad_sequences  # Para hacer secuencias de igual longitud
+from tensorflow.keras.models import Sequential  # Para crear modelo secuencial
+# Capas del modelo neural
 from tensorflow.keras.layers import (
-    Embedding, 
-    LSTM, 
-    Dense, 
-    Dropout, 
-    Bidirectional, 
-    GlobalMaxPooling1D, 
-    Conv1D,
-    Input,
-    BatchNormalization,
-    SpatialDropout1D
+    Embedding,  # Para embeddings de palabras
+    LSTM,       # Capa LSTM para procesamiento secuencial
+    Dense,      # Capa completamente conectada
+    Dropout,    # Para prevenir overfitting
+    Bidirectional,  # Para LSTM bidireccional
+    GlobalMaxPooling1D,  # Para reducir dimensionalidad
+    Conv1D,     # Para convolución 1D
+    Input,      # Capa de entrada
+    BatchNormalization,  # Para normalizar los datos
+    SpatialDropout1D    # Dropout espacial para embeddings
 )
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.regularizers import l2
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # Callbacks para entreamiento
+from tensorflow.keras.regularizers import l2  # Para regularización L2
 import tensorflow as tf
 
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords, wordnet
-from nltk.stem import WordNetLemmatizer
+# --- Librerías de procesamiento de lenguaje natural ---
+from nltk.tokenize import word_tokenize  # Para tokenización
+from nltk.corpus import stopwords, wordnet  # Para stopwords y sinónimos
+from nltk.stem import WordNetLemmatizer  # Para lematización
 import nltk
 
-import optuna
-import logging
-import spacy
-import gensim.downloader as api
-import pickle
-import random
-from collections import defaultdict
-import mlflow
+# --- Otras librerías útiles ---
+import optuna  # Para optimización de hiperparámetros
+import logging  # Para registro de eventos
+import spacy   # Para procesamiento de lenguaje natural
+import gensim.downloader as api  # Para cargar word embeddings
+import pickle  # Para guardar/cargar objetos
+import random  # Para operaciones aleatorias
+from collections import defaultdict  # Para diccionarios con valor por defecto
+import mlflow  # Para tracking de experimentos
 import mlflow.keras
 from mlflow.models.signature import infer_signature
-from googletrans import Translator
+from googletrans import Translator  # Para traducción
 
 # Configuración inicial
 logging.basicConfig(level=logging.INFO)
@@ -49,12 +57,13 @@ nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('averaged_perceptron_tagger')
 
-# Configuración de parámetros
-MAX_WORDS = 15000
-MAX_LEN = 128
-EMBEDDING_DIM = 200
+# Parámetros globales del modelo
+MAX_WORDS = 15000    # Máximo número de palabras en el vocabulario
+MAX_LEN = 128       # Longitud máxima de las secuencias
+EMBEDDING_DIM = 200  # Dimensión de los embeddings
 
 # Diccionario expandido de palabras ofensivas y sus sinónimos
+# Esto ayuda a aumentar el dataset y mejorar la detección
 OFFENSIVE_SYNONYMS = {
     'hate': ['despise', 'loathe', 'detest', 'abhor', 'resent', 'dislike'],
     'stupid': ['idiotic', 'moronic', 'brainless', 'foolish', 'dense', 'dull'],
@@ -68,11 +77,18 @@ OFFENSIVE_SYNONYMS = {
 }
 
 class TextProcessor:
+    """
+    Clase para procesar y limpiar texto
+    """
     def __init__(self):
+        # Inicializar stopwords excluyendo palabras importantes para la detección
         self.stop_words = set(stopwords.words('english')) - {'no', 'not', 'hate', 'against', 'racist', 'abuse', 'toxic'}
         self.lemmatizer = WordNetLemmatizer()
         
     def clean_text(self, text):
+        """
+        Limpia y preprocesa el texto
+        """
         if not isinstance(text, str):
             text = str(text)
         
@@ -100,6 +116,9 @@ class TextProcessor:
         return ' '.join(words)
 
 class TextAugmenter:
+    """
+    Clase para aumentar datos de texto usando diferentes técnicas
+    """
     def __init__(self):
         self.lemmatizer = WordNetLemmatizer()
         self.offensive_patterns = self._compile_offensive_patterns()
@@ -166,7 +185,12 @@ class TextAugmenter:
         return ' '.join(new_words)
 
     def augment_text(self, text, augmentation_factor=2):
-        """Aumenta el texto usando múltiples técnicas"""
+        """
+        Aumenta el texto usando múltiples técnicas como:
+        - Sustitución de sinónimos
+        - Back translation
+        - Eliminación aleatoria de palabras
+        """
         augmented_texts = [text]
         
         for _ in range(augmentation_factor - 1):
@@ -194,12 +218,21 @@ class TextAugmenter:
         return augmented_texts
 
 class ModelTrainer:
+    """
+    Clase principal para entrenar el modelo
+    """
     def __init__(self):
         self.tokenizer = None
         self.text_augmenter = TextAugmenter()
         self.text_processor = TextProcessor()
         
     def prepare_data(self, df):
+        """
+        Prepara los datos para el entrenamiento:
+        1. Limpia y procesa el texto
+        2. Aumenta los datos de la clase minoritaria
+        3. Tokeniza y padea las secuencias
+        """
         logging.info("Iniciando preprocesamiento y augmentación de texto...")
         
         df['Text'] = df['Text'].fillna('')
@@ -253,6 +286,15 @@ class ModelTrainer:
         return embedding_matrix
 
     def create_model(self, params, embedding_matrix):
+        """
+        Crea el modelo neural con la siguiente arquitectura:
+        1. Capa de Embedding
+        2. Capa Convolucional 1D
+        3. LSTM Bidireccional
+        4. Capas Dense
+        Incluye regularización y normalización para prevenir overfitting
+        """
+           
     # Definir la métrica F1 personalizada
         class BinaryF1Score(tf.keras.metrics.Metric):
             def __init__(self, name='f1', **kwargs):
@@ -286,36 +328,74 @@ class ModelTrainer:
         )
 
         model = Sequential([
-            Input(shape=(MAX_LEN,)),
-            Embedding(MAX_WORDS + 1, EMBEDDING_DIM, 
-                    weights=[embedding_matrix], 
-                    trainable=False),
-            SpatialDropout1D(0.3),
+
+            # Entrada de datos: secuencias de texto ya procesadas y con padding aplicado.
+            Input(shape=(MAX_LEN,)),  # El tamaño de entrada es la longitud máxima de las secuencias (MAX_LEN).
+
+            # Embedding layer: convierte palabras en vectores densos usando embeddings preentrenados.
+            Embedding(
+                MAX_WORDS + 1,  # Número máximo de palabras en el vocabulario más un token para OOV (<OOV>).
+                EMBEDDING_DIM,  # Dimensión del embedding (por ejemplo, 200).
+                weights=[embedding_matrix],  # Usamos embeddings preentrenados de GloVe.
+                trainable=False  # No se entrenan los embeddings; se usan tal cual.
+            ),
+
+            # SpatialDropout1D: desactiva aleatoriamente características en el embedding para regularización.
+            SpatialDropout1D(0.3),  # Previene el sobreajuste desactivando características en cada paso.
+
+            # BatchNormalization: normaliza los valores a lo largo del batch para estabilizar y acelerar el entrenamiento.
             BatchNormalization(),
-            
-            Conv1D(params['conv_filters'], 5, activation='relu',
-                kernel_regularizer=l2(0.02),
-                bias_regularizer=l2(0.02)),
+
+            # Conv1D: una capa convolucional para extraer características locales del texto.
+            Conv1D(
+                params['conv_filters'],  # Número de filtros (parámetro ajustable).
+                5,  # Tamaño del kernel (analiza 5 palabras consecutivas).
+                activation='relu',  # Activación ReLU para no linealidad.
+                kernel_regularizer=l2(0.02),  # Regularización L2 para evitar sobreajuste.
+                bias_regularizer=l2(0.02)  # Regularización para los sesgos también.
+            ),
+
+            # BatchNormalization: vuelve a normalizar las características después de la convolución.
             BatchNormalization(),
-            Dropout(0.4),
-            
-            Bidirectional(LSTM(params['lstm_units_1'] //2, 
-                            return_sequences=True,
-                            kernel_regularizer=l2(0.02),
-                            recurrent_regularizer=l2(0.02),
-                            bias_regularizer=l2(0.02))),
+
+            # Dropout: desactiva nodos aleatoriamente para reducir el sobreajuste.
+            Dropout(0.4),  # El 40% de las neuronas se desactivan durante cada paso.
+
+            # Bidirectional LSTM: analiza las secuencias en ambas direcciones (hacia adelante y hacia atrás).
+            Bidirectional(
+                LSTM(
+                    params['lstm_units_1'] // 2,  # Número de unidades LSTM dividido entre 2 (una mitad para cada dirección).
+                    return_sequences=True,  # Mantiene todas las salidas para procesarlas más adelante.
+                    kernel_regularizer=l2(0.02),  # Regularización L2 para los pesos.
+                    recurrent_regularizer=l2(0.02),  # Regularización en las conexiones recurrentes.
+                    bias_regularizer=l2(0.02)  # Regularización en los sesgos.
+                )
+            ),
+
+            # BatchNormalization: normaliza las salidas de la capa LSTM bidireccional.
             BatchNormalization(),
-            Dropout(0.4),
-            
-            GlobalMaxPooling1D(),
-            
-            Dense(params['dense_units_1']//2, 
-                activation='relu',
-                kernel_regularizer=l2(0.02)),
-            
-            Dropout(0.5),
-            
-            Dense(1, activation='sigmoid')
+
+            # Dropout: añade otro nivel de regularización para la capa recurrente.
+            Dropout(0.4),  # El 40% de las neuronas se desactivan.
+
+            # GlobalMaxPooling1D: reduce las dimensiones extrayendo los valores máximos de las características.
+            GlobalMaxPooling1D(),  # Toma el valor más alto por característica para capturar la información más relevante.
+
+            # Primera capa densa: combina las características extraídas de forma no lineal.
+            Dense(
+                params['dense_units_1'] // 2,  # Número de neuronas en la capa densa (ajustable).
+                activation='relu',  # Activación ReLU.
+                kernel_regularizer=l2(0.02)  # Regularización L2 para los pesos.
+            ),
+
+            # Dropout: más regularización para evitar que la capa densa memorice.
+            Dropout(0.5),  # El 50% de las neuronas se desactivan.
+
+            # Capa de salida: produce una probabilidad binaria para la clasificación.
+            Dense(
+                1,  # Una sola salida (0 o 1).
+                activation='sigmoid'  # Activación sigmoidal para una salida entre 0 y 1 (probabilidad).
+            )
         ])
 
         optimizer = tf.keras.optimizers.Adam(
@@ -335,6 +415,13 @@ class ModelTrainer:
         return model
 
     def train_with_cv(self, df, n_splits=5):
+        """
+        Entrena el modelo usando validación cruzada y:
+        1. Registra métricas con MLflow
+        2. Implementa early stopping
+        3. Reduce learning rate cuando sea necesario
+        4. Guarda el mejor modelo
+        """
         X, y = self.prepare_data(df)
         embedding_matrix = self.load_embeddings()
         
@@ -351,7 +438,7 @@ class ModelTrainer:
         kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_metrics = []
         
-        # Eliminar la configuración de autolog aquí
+        
         with mlflow.start_run() as run:
             mlflow.log_params(params)
             
@@ -460,7 +547,11 @@ class ModelTrainer:
 
 def evaluate_model_performance(model, X_test, y_test):
     """
-    Evalúa el rendimiento del modelo y genera métricas detalladas
+    Evalúa el modelo usando múltiples métricas:
+    - Precisión
+    - Recall
+    - F1-score
+    - AUC-ROC
     """
     # Predicciones
     y_pred = model.predict(X_test)
