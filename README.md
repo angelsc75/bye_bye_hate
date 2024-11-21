@@ -119,3 +119,109 @@ python src/rnn_antioverfitting.py
    ```
 3. Commit y push
 4. Crear Pull Request
+   
+# FUNCIONAMIENTO DEL MODELO
+# 🎯 **Objetivo del Modelo**
+
+El modelo busca detectar texto ofensivo o tóxico mediante técnicas avanzadas de procesamiento de lenguaje natural y deep learning.
+
+## 1. Datos de Entrada
+
+### Fuente de Datos
+* Archivo CSV: 'youtoxic_english_1000.csv'
+* Contiene textos con etiquetas de diferentes tipos de ofensividad:
+   * IsAbusive
+   * IsProvocative
+   * IsObscene
+   * IsHatespeech
+   * IsRacist
+
+### Preprocesamiento de Datos
+
+1. **Limpieza de Texto**:
+   * Convertir a minúsculas
+   * Eliminar URLs
+   * Eliminar caracteres especiales
+   * Lematización (reducir palabras a su forma base)
+   * Eliminar stopwords
+
+2. **Aumento de Datos** (Data Augmentation):
+   * Para textos ofensivos, se generan variaciones usando:
+      * Sustitución de sinónimos
+      * Back-translation (traducir y re-traducir)
+      * Eliminación aleatoria de palabras
+
+## 2. Arquitectura del Modelo
+
+El modelo es una red neuronal profunda con las siguientes capas:
+
+### A. Embedding Layer
+* Convierte palabras en vectores densos
+* Usa embeddings preentrenados de GloVe (Twitter)
+* Dimensión: 200
+
+### B. Procesamiento Convolucional
+* Capa Conv1D para extraer características locales
+* Filtros ajustables
+* Kernel de 5 palabras
+* Activación ReLU
+
+### C. LSTM Bidireccional
+* Analiza secuencias en ambas direcciones
+* Captura contexto complejo
+* Regularización para prevenir overfitting
+
+### D. Capas Densas
+* Combinan características extraídas
+* Capa final con activación sigmoidal
+* Salida: Probabilidad binaria de ser texto ofensivo
+
+## 3. Técnicas Anti-Overfitting
+
+1. Regularización L2
+2. Dropout (40-50%)
+3. BatchNormalization
+4. Learning Rate Decay
+5. Early Stopping
+6. Reducción de Learning Rate
+
+## 4. Entrenamiento
+
+### Estrategias
+* Validación cruzada estratificada (5 folds)
+* Balanceo de clases con class weights
+* Métricas:
+   * Accuracy
+   * AUC
+   * Precisión
+   * Recall
+   * F1-Score
+
+### División de Datos
+* 90% para entrenamiento/validación
+* 10% para test final
+
+## 5. Seguimiento de Experimentos
+
+Usa MLflow para:
+* Registrar hiperparámetros
+* Trackear métricas
+* Guardar modelos
+* Detectar posible overfitting
+
+## 6. Características Innovadoras
+
+* Diccionario expandido de palabras ofensivas
+* Técnicas avanzadas de aumento de datos
+* Métricas personalizadas
+* Regularización multi-nivel
+
+## Ejemplo de Flujo
+
+`Texto de entrada → Limpieza → Tokenización → Embedding → Convolución → LSTM → Clasificación Binaria (Ofensivo/No Ofensivo)`
+
+## Consideraciones Finales
+
+✅ Modelo robusto para clasificación de texto tóxico
+✅ Aproximación técnica para detección automática
+❗ Requiere datos de calidad y diversidad
