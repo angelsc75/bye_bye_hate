@@ -119,6 +119,12 @@ python src/rnn_antioverfitting.py
    ```
 3. Commit y push
 4. Crear Pull Request
+
+## Crear imagen en Docker y arrancar los contenedores
+1. Ejecutar el comando ```bash
+  docker-compose up --build
+   ```
+2. Se arranca un contendor de streamlit donde se ejecuta la app y dos contenedores, uno para mongodb y otro para mongo express
    
 # FUNCIONAMIENTO DEL MODELO
 # 🎯 **Objetivo del Modelo**
