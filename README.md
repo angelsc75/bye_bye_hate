@@ -125,7 +125,13 @@ python src/rnn_antioverfitting.py
   docker-compose up --build
    ```
 2. Se arranca un contendor de streamlit donde se ejecuta la app y dos contenedores, uno para mongodb y otro para mongo express
-   
+## Visionado de experimientos en MLflow
+1. En la rama experimentos-con-mlflow están registradas las métricas del modelo entrenado alterando el hiperparámetro de batch-size (16, 32, 64, 128)
+2.    Ejecutar el comando ```bash
+  mlflow ui  
+   ```
+   (nota: el modelo cargado en la app el el que tiene el batch-size de 32)
+3. La terminal ofrece el servidor donde se pueden consultar los experimentos
 # FUNCIONAMIENTO DEL MODELO
 # 🎯 **Objetivo del Modelo**
 
