@@ -120,10 +120,7 @@ python src/rnn_antioverfitting.py
 3. Commit y push
 4. Crear Pull Request
 
-## Descargar imagen en Docker Hub 
-1. La imagen se  puede descargar en angelsc75/npl-g11-app
-2. Se ejecuta la imagen y se crean tres contenedores.
-3. Se arranca un contendor de streamlit donde se ejecuta la app y dos contenedores, uno para mongodb y otro para mongo express
+
 ## Visionado de experimientos en MLflow
 1. En la rama experimentos-con-mlflow están registradas las métricas del modelo entrenado alterando el hiperparámetro de batch-size (16, 32, 64, 128)
 2.    Ejecutar el comando ```bash
