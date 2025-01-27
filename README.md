@@ -1,6 +1,7 @@
 # Detector de Mensajes de Odio en YouTube
 
 ## 📝 Descripción
+Nota: Este proyecto está realizado dentro del bootcamp de IA de Factoría F5, que tuvo lugar entre mayo de 2024 y marzo de 2025. Es un proyecto realizado en parejas que corresponde a la parte de NLP.
 Sistema de detección y análisis de mensajes de odio en comentarios de YouTube utilizando Deep Learning y Natural Language Processing. Implementado con Redes Neuronales Convolucionales  y Streamlit.
 
 ## 🛠️ Tecnologías Principales
